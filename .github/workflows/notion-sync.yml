@@ -27,17 +27,8 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_READING_LIST_ID: ${{ secrets.NOTION_READING_LIST_ID }}
           NOTION_WORKSPACE_ID: ${{ secrets.NOTION_WORKSPACE_ID }}
-        run: node .github/scripts/sync-to-notion.js
-        
-      - name: Sync from Notion
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_WORKSPACE_ID: ${{ secrets.NOTION_WORKSPACE_ID }}
-        run: node .github/scripts/sync-from-notion.js
-        
-      - name: Commit changes
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add .
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Sync with Notion" && git push) 
+          echo "Starting Notion sync..."
+          node .github/scripts/sync-to-notion.js
+          echo "Notion sync completed"
+        continue-on-error: false 

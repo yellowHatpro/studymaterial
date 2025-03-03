@@ -9,7 +9,38 @@ const notion = new Client({
 const READING_LIST_ID = process.env.NOTION_READING_LIST_ID;
 const WORKSPACE_ID = process.env.NOTION_WORKSPACE_ID;
 
+// Split content into chunks of max 2000 characters
+function splitContentIntoBlocks(content) {
+  const blocks = [];
+  const maxLength = 2000;
+  
+  // Split by newlines to preserve formatting
+  const lines = content.split('\n');
+  let currentBlock = '';
+  
+  for (const line of lines) {
+    if ((currentBlock + line).length > maxLength) {
+      if (currentBlock) {
+        blocks.push(currentBlock);
+      }
+      currentBlock = line;
+    } else {
+      currentBlock += (currentBlock ? '\n' : '') + line;
+    }
+  }
+  
+  if (currentBlock) {
+    blocks.push(currentBlock);
+  }
+  
+  return blocks;
+}
+
 async function syncToNotion() {
+  console.log('Starting sync to Notion...');
+  console.log('Using Reading List ID:', READING_LIST_ID);
+  console.log('Using Workspace ID:', WORKSPACE_ID);
+  
   const files = getAllMarkdownFiles('.');
   console.log('Found files:', files);
   
@@ -19,6 +50,8 @@ async function syncToNotion() {
     
     // Only process files in docs directories
     if (!relativePath.includes('/docs/')) continue;
+    
+    console.log('Processing file:', relativePath);
     
     // Create or update the page in Notion
     const pageId = await createOrUpdateNotionPage(relativePath, content);
@@ -77,20 +110,35 @@ async function createOrUpdateNotionPage(filePath, content) {
     );
 
     if (existingPage) {
-      // Update existing page
-      await notion.blocks.children.append({
-        block_id: existingPage.id,
-        children: [
-          {
-            type: 'paragraph',
-            paragraph: {
-              rich_text: [{ type: 'text', text: { content } }]
-            }
-          }
-        ]
+      console.log('Found existing page:', existingPage.id);
+      // Delete existing blocks
+      const blocks = await notion.blocks.children.list({
+        block_id: existingPage.id
       });
+      
+      for (const block of blocks.results) {
+        await notion.blocks.delete({
+          block_id: block.id
+        });
+      }
+      
+      // Add new content in chunks
+      const contentBlocks = splitContentIntoBlocks(content);
+      for (const block of contentBlocks) {
+        await notion.blocks.children.append({
+          block_id: existingPage.id,
+          children: [
+            {
+              type: 'paragraph',
+              paragraph: {
+                rich_text: [{ type: 'text', text: { content: block } }]
+              }
+            }
+          ]
+        });
+      }
       console.log('Updated existing page:', pageTitle);
-      return null;
+      return existingPage.id;
     } else {
       // Create new page
       const newPage = await notion.pages.create({
@@ -104,11 +152,28 @@ async function createOrUpdateNotionPage(filePath, content) {
           {
             type: 'paragraph',
             paragraph: {
-              rich_text: [{ type: 'text', text: { content } }]
+              rich_text: [{ type: 'text', text: { content: content.slice(0, 2000) } }]
             }
           }
         ]
       });
+      
+      // Add remaining content in chunks
+      const contentBlocks = splitContentIntoBlocks(content.slice(2000));
+      for (const block of contentBlocks) {
+        await notion.blocks.children.append({
+          block_id: newPage.id,
+          children: [
+            {
+              type: 'paragraph',
+              paragraph: {
+                rich_text: [{ type: 'text', text: { content: block } }]
+              }
+            }
+          ]
+        });
+      }
+      
       console.log('Created new page:', pageTitle);
       return newPage.id;
     }
