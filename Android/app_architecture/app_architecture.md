@@ -20,10 +20,6 @@ Another important principle is that you should drive your UI from a model, prefe
 3. LiveData
 4. Room
 
-These components deal lifecycle related problems.
-
-![](https://developer.android.com/codelabs/basic-android-kotlin-training-viewmodel/img/53dd5e42f23ffba9.png)
-
 #### UI controller (Activity/ Fragment)
 
 Activities and fragments are UI controllers.
