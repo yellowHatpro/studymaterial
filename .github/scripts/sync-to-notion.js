@@ -10,7 +10,6 @@ const READING_LIST_ID = process.env.NOTION_READING_LIST_ID;
 const WORKSPACE_ID = process.env.NOTION_WORKSPACE_ID;
 
 async function syncToNotion() {
-  // Get all markdown files from docs directories
   const files = getAllMarkdownFiles('.');
   console.log('Found files:', files);
   
@@ -55,13 +54,13 @@ function getAllMarkdownFiles(dir) {
 
 async function createOrUpdateNotionPage(filePath, content) {
   try {
-    // Get the topic and title from the file path
-    const parts = filePath.split('/');
-    const topic = parts[0]; // e.g., 'android'
-    const title = path.basename(filePath, '.md'); // Remove .md extension
+    // Split the path into parts and remove 'docs' from the path
+    const parts = filePath.split('/').filter(part => part !== 'docs');
+    const fileName = parts.pop(); // Get the file name
+    const title = path.basename(fileName, '.md'); // Remove .md extension
     
-    // Create the page title with topic prefix
-    const pageTitle = `${topic}/${title}`;
+    // Create the full path for the page title
+    const pageTitle = parts.join('/') + '/' + title;
     console.log('Creating/updating page:', pageTitle);
 
     // Search for existing page
