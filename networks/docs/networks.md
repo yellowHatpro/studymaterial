@@ -1,3 +1,1 @@
 # Computer Networks
-
-## Introduction
