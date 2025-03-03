@@ -7,6 +7,7 @@ const notion = new Client({
 });
 
 const READING_LIST_ID = process.env.NOTION_READING_LIST_ID;
+const PARENT_PAGE_ID = '1ab535d7772c8081a7edfb3141ef4a62'; // Your Study Material page ID
 
 const MAX_CONTENT_LENGTH = 2000;
 
@@ -49,6 +50,7 @@ function splitContentIntoFiles(filePath, content) {
 async function syncToNotion() {
   console.log('Starting sync to Notion...');
   console.log('Using Reading List ID:', READING_LIST_ID);
+  console.log('Using Parent Page ID:', PARENT_PAGE_ID);
   
   const files = getAllMarkdownFiles('.');
   console.log('Found files:', files);
@@ -156,6 +158,7 @@ async function createOrUpdateNotionPage(filePath, content) {
     } else {
       // Create new page
       const newPage = await notion.pages.create({
+        parent: { page_id: PARENT_PAGE_ID },
         properties: {
           title: {
             title: [{ text: { content: pageTitle } }]
