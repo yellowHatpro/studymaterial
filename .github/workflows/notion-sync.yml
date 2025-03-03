@@ -3,6 +3,8 @@ name: Notion Sync
 on:
   push:
     branches: [ main ]
+    paths:
+      - '**/docs/**/*.md'  # Only trigger on markdown files in docs folders
   schedule:
     - cron: '0 */6 * * *'  # Run every 6 hours
 
@@ -23,13 +25,14 @@ jobs:
       - name: Sync to Notion
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NOTION_READING_LIST_ID: ${{ secrets.NOTION_READING_LIST_ID }}
+          NOTION_WORKSPACE_ID: ${{ secrets.NOTION_WORKSPACE_ID }}
         run: node .github/scripts/sync-to-notion.js
         
       - name: Sync from Notion
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NOTION_WORKSPACE_ID: ${{ secrets.NOTION_WORKSPACE_ID }}
         run: node .github/scripts/sync-from-notion.js
         
       - name: Commit changes
