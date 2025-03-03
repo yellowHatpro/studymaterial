@@ -6,50 +6,82 @@ const notion = new Client({
   auth: process.env.NOTION_TOKEN,
 });
 
-const READING_LIST_ID = process.env.NOTION_READING_LIST_ID;
 const PARENT_PAGE_ID = '1ab535d7772c8081a7edfb3141ef4a62'; // Your Study Material page ID
+const MAX_BLOCK_LENGTH = 2000;
 
-const MAX_CONTENT_LENGTH = 2000;
+// Cache for folder page IDs
+const folderPageCache = new Map();
 
-// Split content into multiple files if it exceeds the limit
-function splitContentIntoFiles(filePath, content) {
-  if (content.length <= MAX_CONTENT_LENGTH) {
-    return [filePath];
+async function getFolderPageId(folderPath) {
+  if (folderPageCache.has(folderPath)) {
+    return folderPageCache.get(folderPath);
   }
 
-  const files = [];
+  const response = await notion.search({
+    query: folderPath,
+    filter: {
+      property: 'object',
+      value: 'page'
+    }
+  });
+
+  const existingPage = response.results.find(p => 
+    p.properties?.title?.title?.[0]?.plain_text === folderPath
+  );
+
+  if (existingPage) {
+    folderPageCache.set(folderPath, existingPage.id);
+    return existingPage.id;
+  }
+
+  // Create folder page
+  const newPage = await notion.pages.create({
+    parent: { page_id: PARENT_PAGE_ID },
+    properties: {
+      title: {
+        title: [{ text: { content: folderPath } }]
+      }
+    },
+    children: [
+      {
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [{ type: 'text', text: { content: `Content from ${folderPath}` } }]
+        }
+      }
+    ]
+  });
+
+  folderPageCache.set(folderPath, newPage.id);
+  return newPage.id;
+}
+
+// Split content into blocks of max 2000 characters
+function splitContentIntoBlocks(content) {
+  const blocks = [];
   const lines = content.split('\n');
-  let currentContent = '';
-  let partNumber = 1;
-  const dir = path.dirname(filePath);
-  const baseName = path.basename(filePath, '.md');
+  let currentBlock = '';
 
   for (const line of lines) {
-    if ((currentContent + line).length > MAX_CONTENT_LENGTH) {
-      if (currentContent) {
-        const newFilePath = path.join(dir, `${baseName}_${partNumber}.md`);
-        fs.writeFileSync(newFilePath, currentContent);
-        files.push(newFilePath);
-        partNumber++;
+    if ((currentBlock + line).length > MAX_BLOCK_LENGTH) {
+      if (currentBlock) {
+        blocks.push(currentBlock);
       }
-      currentContent = line;
+      currentBlock = line;
     } else {
-      currentContent += (currentContent ? '\n' : '') + line;
+      currentBlock += (currentBlock ? '\n' : '') + line;
     }
   }
 
-  if (currentContent) {
-    const newFilePath = path.join(dir, `${baseName}_${partNumber}.md`);
-    fs.writeFileSync(newFilePath, currentContent);
-    files.push(newFilePath);
+  if (currentBlock) {
+    blocks.push(currentBlock);
   }
 
-  return files;
+  return blocks;
 }
 
 async function syncToNotion() {
   console.log('Starting sync to Notion...');
-  console.log('Using Reading List ID:', READING_LIST_ID);
   console.log('Using Parent Page ID:', PARENT_PAGE_ID);
   
   const files = getAllMarkdownFiles('.');
@@ -64,22 +96,14 @@ async function syncToNotion() {
     
     console.log('Processing file:', relativePath);
     
-    // Split content into multiple files if needed
-    const filesToProcess = splitContentIntoFiles(file, content);
+    // Create or update the page in Notion
+    const pageId = await createOrUpdateNotionPage(relativePath, content);
+    console.log('Synced file:', relativePath, 'Page ID:', pageId);
     
-    for (const fileToProcess of filesToProcess) {
-      const content = fs.readFileSync(fileToProcess, 'utf8');
-      const relativePath = path.relative('.', fileToProcess);
-      
-      // Create or update the page in Notion
-      const pageId = await createOrUpdateNotionPage(relativePath, content);
-      console.log('Synced file:', relativePath, 'Page ID:', pageId);
-      
-      // Add to Study Material Reading List if it's a new page
-      if (pageId) {
-        await addToReadingList(relativePath, pageId);
-        console.log('Added to reading list:', relativePath);
-      }
+    // Add to Study Material Reading List if it's a new page
+    if (pageId) {
+      await addToReadingList(relativePath, pageId);
+      console.log('Added to reading list:', relativePath);
     }
   }
 }
@@ -108,12 +132,16 @@ async function createOrUpdateNotionPage(filePath, content) {
   try {
     // Split the path into parts and remove 'docs' from the path
     const parts = filePath.split('/').filter(part => part !== 'docs');
+    const topLevelFolder = parts[0]; // e.g., 'javascript'
     const fileName = parts.pop(); // Get the file name
     const title = path.basename(fileName, '.md'); // Remove .md extension
     
-    // Create the full path for the page title
-    const pageTitle = parts.join('/') + '/' + title;
-    console.log('Creating/updating page:', pageTitle);
+    // Get or create the folder page
+    const folderPageId = await getFolderPageId(topLevelFolder);
+    
+    // Create the page title (without the top-level folder)
+    const pageTitle = parts.slice(1).concat(title).join('/');
+    console.log('Creating/updating page:', pageTitle, 'in folder:', topLevelFolder);
 
     // Search for existing page
     const response = await notion.search({
@@ -141,37 +169,41 @@ async function createOrUpdateNotionPage(filePath, content) {
         });
       }
       
-      // Add new content
-      await notion.blocks.children.append({
-        block_id: existingPage.id,
-        children: [
-          {
-            type: 'paragraph',
-            paragraph: {
-              rich_text: [{ type: 'text', text: { content } }]
+      // Split content into blocks and add them
+      const contentBlocks = splitContentIntoBlocks(content);
+      for (const block of contentBlocks) {
+        await notion.blocks.children.append({
+          block_id: existingPage.id,
+          children: [
+            {
+              type: 'paragraph',
+              paragraph: {
+                rich_text: [{ type: 'text', text: { content: block } }]
+              }
             }
-          }
-        ]
-      });
+          ]
+        });
+      }
       console.log('Updated existing page:', pageTitle);
       return existingPage.id;
     } else {
-      // Create new page
+      // Create new page under the folder
+      const contentBlocks = splitContentIntoBlocks(content);
+      const children = contentBlocks.map(block => ({
+        type: 'paragraph',
+        paragraph: {
+          rich_text: [{ type: 'text', text: { content: block } }]
+        }
+      }));
+
       const newPage = await notion.pages.create({
-        parent: { page_id: PARENT_PAGE_ID },
+        parent: { page_id: folderPageId },
         properties: {
           title: {
             title: [{ text: { content: pageTitle } }]
           }
         },
-        children: [
-          {
-            type: 'paragraph',
-            paragraph: {
-              rich_text: [{ type: 'text', text: { content } }]
-            }
-          }
-        ]
+        children
       });
       console.log('Created new page:', pageTitle);
       return newPage.id;
@@ -186,7 +218,7 @@ async function addToReadingList(filePath, pageId) {
   try {
     // Get the Study Material GitHub list block
     const blocks = await notion.blocks.children.list({
-      block_id: READING_LIST_ID
+      block_id: PARENT_PAGE_ID
     });
     
     let githubListId = blocks.results.find(
@@ -197,7 +229,7 @@ async function addToReadingList(filePath, pageId) {
     // Create the list if it doesn't exist
     if (!githubListId) {
       const newToggle = await notion.blocks.children.append({
-        block_id: READING_LIST_ID,
+        block_id: PARENT_PAGE_ID,
         children: [{
           type: 'toggle',
           toggle: {
