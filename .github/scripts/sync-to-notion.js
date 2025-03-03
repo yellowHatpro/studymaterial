@@ -12,6 +12,7 @@ const WORKSPACE_ID = process.env.NOTION_WORKSPACE_ID;
 async function syncToNotion() {
   // Get all markdown files from docs directories
   const files = getAllMarkdownFiles('.');
+  console.log('Found files:', files);
   
   for (const file of files) {
     const content = fs.readFileSync(file, 'utf8');
@@ -22,10 +23,12 @@ async function syncToNotion() {
     
     // Create or update the page in Notion
     const pageId = await createOrUpdateNotionPage(relativePath, content);
+    console.log('Synced file:', relativePath, 'Page ID:', pageId);
     
     // Add to Study Material Reading List if it's a new page
     if (pageId) {
       await addToReadingList(relativePath, pageId);
+      console.log('Added to reading list:', relativePath);
     }
   }
 }
@@ -51,17 +54,19 @@ function getAllMarkdownFiles(dir) {
 }
 
 async function createOrUpdateNotionPage(filePath, content) {
-  // Convert file path to Notion path (remove .md and /docs/)
-  const notionPath = filePath
-    .replace('.md', '')
-    .split('/')
-    .filter(part => part !== 'docs')
-    .join('/');
-
   try {
+    // Get the topic and title from the file path
+    const parts = filePath.split('/');
+    const topic = parts[0]; // e.g., 'android'
+    const title = path.basename(filePath, '.md'); // Remove .md extension
+    
+    // Create the page title with topic prefix
+    const pageTitle = `${topic}/${title}`;
+    console.log('Creating/updating page:', pageTitle);
+
     // Search for existing page
     const response = await notion.search({
-      query: notionPath,
+      query: pageTitle,
       filter: {
         property: 'object',
         value: 'page'
@@ -69,7 +74,7 @@ async function createOrUpdateNotionPage(filePath, content) {
     });
 
     const existingPage = response.results.find(p => 
-      p.properties?.title?.title?.[0]?.plain_text === notionPath
+      p.properties?.title?.title?.[0]?.plain_text === pageTitle
     );
 
     if (existingPage) {
@@ -85,14 +90,15 @@ async function createOrUpdateNotionPage(filePath, content) {
           }
         ]
       });
-      return null; // Return null since it's not a new page
+      console.log('Updated existing page:', pageTitle);
+      return null;
     } else {
       // Create new page
       const newPage = await notion.pages.create({
         parent: { page_id: WORKSPACE_ID },
         properties: {
           title: {
-            title: [{ text: { content: notionPath } }]
+            title: [{ text: { content: pageTitle } }]
           }
         },
         children: [
@@ -104,6 +110,7 @@ async function createOrUpdateNotionPage(filePath, content) {
           }
         ]
       });
+      console.log('Created new page:', pageTitle);
       return newPage.id;
     }
   } catch (error) {
@@ -136,6 +143,7 @@ async function addToReadingList(filePath, pageId) {
         }]
       });
       githubListId = newToggle.results[0].id;
+      console.log('Created Study Material GitHub list');
     }
 
     // Add the page to the list
@@ -149,6 +157,7 @@ async function addToReadingList(filePath, pageId) {
         }
       }]
     });
+    console.log('Added page to list:', filePath);
   } catch (error) {
     console.error('Error adding to reading list:', error);
   }
