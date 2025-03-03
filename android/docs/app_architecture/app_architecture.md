@@ -1,4 +1,4 @@
-## App Architecture
+# App Architecture
 
 The most common architectural principles are: separation of concerns and driving UI from a model.
 
