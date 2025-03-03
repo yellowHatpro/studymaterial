@@ -53,8 +53,9 @@ async function getFolderPageId(folderPath, parentId) {
   }
 
   // Get the folder name (last part of the path)
-  const folderName = folderPath.split('/').pop();
+  const folderName = path.basename(folderPath);
 
+  // Search for the folder in the parent
   const response = await notion.search({
     query: folderName,
     filter: {
@@ -73,7 +74,7 @@ async function getFolderPageId(folderPath, parentId) {
     return existingPage.id;
   }
 
-  // Create folder page with the folder name (not the full path)
+  // Create folder page
   const newPage = await notion.pages.create({
     parent: { page_id: parentId },
     properties: {
@@ -92,13 +93,82 @@ function markdownToBlocks(content) {
   const tokens = marked.lexer(content);
   const blocks = [];
 
+  // Helper function to process inline tokens
+  function processInlineTokens(text) {
+    if (!text) return [];
+    const inlineTokens = marked.lexer(text);
+    let richText = [];
+
+    for (const token of inlineTokens) {
+      if (token.type === 'text') {
+        // Process inline code within text
+        const parts = token.text.split('`');
+        for (let i = 0; i < parts.length; i++) {
+          if (parts[i]) {
+            if (i % 2 === 0) {
+              // Regular text
+              richText.push({
+                type: 'text',
+                text: { content: parts[i] }
+              });
+            } else {
+              // Inline code
+              richText.push({
+                type: 'text',
+                text: { content: parts[i] },
+                annotations: {
+                  code: true
+                }
+              });
+            }
+          }
+        }
+      } else if (token.type === 'codespan') {
+        richText.push({
+          type: 'text',
+          text: { content: token.text },
+          annotations: {
+            code: true
+          }
+        });
+      } else if (token.type === 'strong') {
+        richText.push({
+          type: 'text',
+          text: { content: token.text },
+          annotations: {
+            bold: true
+          }
+        });
+      } else if (token.type === 'em') {
+        richText.push({
+          type: 'text',
+          text: { content: token.text },
+          annotations: {
+            italic: true
+          }
+        });
+      } else if (token.type === 'link') {
+        richText.push({
+          type: 'text',
+          text: { content: token.text, link: { url: token.href } }
+        });
+      } else {
+        richText.push({
+          type: 'text',
+          text: { content: token.raw }
+        });
+      }
+    }
+    return richText;
+  }
+
   for (const token of tokens) {
     switch (token.type) {
       case 'heading':
         blocks.push({
           type: 'heading_' + token.depth,
           ['heading_' + token.depth]: {
-            rich_text: [{ type: 'text', text: { content: token.text } }]
+            rich_text: processInlineTokens(token.text)
           }
         });
         break;
@@ -106,7 +176,7 @@ function markdownToBlocks(content) {
         blocks.push({
           type: 'paragraph',
           paragraph: {
-            rich_text: [{ type: 'text', text: { content: token.text } }]
+            rich_text: processInlineTokens(token.text)
           }
         });
         break;
@@ -125,7 +195,7 @@ function markdownToBlocks(content) {
           blocks.push({
             type: listType,
             [listType]: {
-              rich_text: [{ type: 'text', text: { content: item.text } }]
+              rich_text: processInlineTokens(item.text)
             }
           });
         }
@@ -134,7 +204,15 @@ function markdownToBlocks(content) {
         blocks.push({
           type: 'quote',
           quote: {
-            rich_text: [{ type: 'text', text: { content: token.text } }]
+            rich_text: processInlineTokens(token.text)
+          }
+        });
+        break;
+      case 'space':
+        blocks.push({
+          type: 'paragraph',
+          paragraph: {
+            rich_text: []
           }
         });
         break;
@@ -199,25 +277,29 @@ async function createOrUpdateNotionPage(filePath, content) {
     const parts = filePath.split('/').filter(part => part !== 'docs');
     let currentParentId = PARENT_PAGE_ID;
     
-    // Create the complete folder path structure
+    // Create nested folder structure
     // For example: android/fragments/safe_args.md
     // Should create: android -> fragments -> safe_args
-    for (let i = 0; i < parts.length - 1; i++) {
-      const folderPath = parts.slice(0, i + 1).join('/');
-      const folderName = parts[i];
+    const fileName = parts[parts.length - 1];
+    const folders = parts.slice(0, -1);
+    
+    // Create each folder in the hierarchy
+    for (let i = 0; i < folders.length; i++) {
+      const folderPath = folders.slice(0, i + 1).join('/');
       currentParentId = await getFolderPageId(folderPath, currentParentId);
       console.log(`Created/found folder: ${folderPath} with ID: ${currentParentId}`);
     }
 
-    const fileName = path.basename(parts[parts.length - 1], '.md');
-    console.log('Creating/updating page:', fileName, 'in folder:', currentParentId);
+    // Get just the name without .md extension
+    const pageName = path.basename(fileName, '.md');
+    console.log('Creating/updating page:', pageName, 'in folder:', currentParentId);
 
     // Generate content hash
     const contentHash = getContentHash(content);
 
     // Search for existing page with exact path match
     const response = await notion.search({
-      query: fileName,
+      query: pageName,
       filter: {
         property: 'object',
         value: 'page'
@@ -225,7 +307,7 @@ async function createOrUpdateNotionPage(filePath, content) {
     });
 
     const existingPage = response.results.find(p => 
-      p.properties?.title?.title?.[0]?.plain_text === fileName &&
+      p.properties?.title?.title?.[0]?.plain_text === pageName &&
       p.parent?.page_id === currentParentId
     );
 
@@ -233,11 +315,11 @@ async function createOrUpdateNotionPage(filePath, content) {
       // Check if content has changed
       const existingHash = await getNotionPageHash(existingPage.id);
       if (existingHash === contentHash) {
-        console.log('Content unchanged, skipping update for:', fileName);
+        console.log('Content unchanged, skipping update for:', pageName);
         return existingPage.id;
       }
 
-      console.log('Content changed, updating page:', fileName);
+      console.log('Content changed, updating page:', pageName);
       // Delete existing blocks
       const blocks = await notion.blocks.children.list({
         block_id: existingPage.id
@@ -266,7 +348,7 @@ async function createOrUpdateNotionPage(filePath, content) {
         children: notionBlocks
       });
       
-      console.log('Updated existing page:', fileName);
+      console.log('Updated existing page:', pageName);
       return existingPage.id;
     } else {
       // Convert markdown and add hash comment
@@ -285,12 +367,12 @@ async function createOrUpdateNotionPage(filePath, content) {
         parent: { page_id: currentParentId },
         properties: {
           title: {
-            title: [{ text: { content: fileName } }]
+            title: [{ text: { content: pageName } }]
           }
         },
         children: notionBlocks
       });
-      console.log('Created new page:', fileName);
+      console.log('Created new page:', pageName);
       return newPage.id;
     }
   } catch (error) {
