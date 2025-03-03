@@ -52,8 +52,11 @@ async function getFolderPageId(folderPath, parentId) {
     return folderPageCache.get(cacheKey);
   }
 
+  // Get the folder name (last part of the path)
+  const folderName = folderPath.split('/').pop();
+
   const response = await notion.search({
-    query: folderPath,
+    query: folderName,
     filter: {
       property: 'object',
       value: 'page'
@@ -61,7 +64,7 @@ async function getFolderPageId(folderPath, parentId) {
   });
 
   const existingPage = response.results.find(p => 
-    p.properties?.title?.title?.[0]?.plain_text === folderPath &&
+    p.properties?.title?.title?.[0]?.plain_text === folderName &&
     p.parent?.page_id === parentId
   );
 
@@ -70,12 +73,12 @@ async function getFolderPageId(folderPath, parentId) {
     return existingPage.id;
   }
 
-  // Create folder page
+  // Create folder page with the folder name (not the full path)
   const newPage = await notion.pages.create({
     parent: { page_id: parentId },
     properties: {
       title: {
-        title: [{ text: { content: folderPath } }]
+        title: [{ text: { content: folderName } }]
       }
     }
   });
@@ -192,16 +195,18 @@ function getAllMarkdownFiles(dir) {
 
 async function createOrUpdateNotionPage(filePath, content) {
   try {
+    // Split the path into parts and remove 'docs' from the path
     const parts = filePath.split('/').filter(part => part !== 'docs');
     let currentParentId = PARENT_PAGE_ID;
-    let currentPath = [];
     
-    // Create nested folder structure
+    // Create the complete folder path structure
+    // For example: android/fragments/safe_args.md
+    // Should create: android -> fragments -> safe_args
     for (let i = 0; i < parts.length - 1; i++) {
-      currentPath.push(parts[i]);
+      const folderPath = parts.slice(0, i + 1).join('/');
       const folderName = parts[i];
-      currentParentId = await getFolderPageId(folderName, currentParentId);
-      console.log(`Created/found folder: ${folderName} with ID: ${currentParentId}`);
+      currentParentId = await getFolderPageId(folderPath, currentParentId);
+      console.log(`Created/found folder: ${folderPath} with ID: ${currentParentId}`);
     }
 
     const fileName = path.basename(parts[parts.length - 1], '.md');
@@ -210,7 +215,7 @@ async function createOrUpdateNotionPage(filePath, content) {
     // Generate content hash
     const contentHash = getContentHash(content);
 
-    // Search for existing page
+    // Search for existing page with exact path match
     const response = await notion.search({
       query: fileName,
       filter: {
